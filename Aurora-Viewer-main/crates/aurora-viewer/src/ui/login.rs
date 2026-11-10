@@ -167,16 +167,57 @@ pub(crate) fn terms_link(ui: &mut egui::Ui, p: &Palette, url: &str) {
     }
 }
 
-/// Animated aurora background (also behind the loading screens without a
-/// last view).
+/// Lolas World login background, embedded in the executable so it is
+/// present even when the viewer is launched outside the source folder.
+fn lolas_background_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let key = egui::Id::new("lolas-world-login-background");
+    if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(key)) {
+        return Some(texture);
+    }
+    let img = image::load_from_memory(include_bytes!("../../../../assets/branding/lolas-login-background.png"))
+        .ok()?
+        .to_rgba8();
+    let pixels = egui::ColorImage::from_rgba_unmultiplied(
+        [img.width() as usize, img.height() as usize],
+        img.as_raw(),
+    );
+    let texture = ctx.load_texture("lolas-world-background", pixels, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|data| data.insert_temp(key, texture.clone()));
+    Some(texture)
+}
+
+/// Golden hibiscus artwork behind Aurora's real, interactive login controls.
+/// The original animated background is retained as a fallback.
 pub fn draw_background(ui: &egui::Ui, p: &Palette) {
     let ctx = ui.ctx();
     let rect = ctx.content_rect();
     let painter = ctx.layer_painter(egui::LayerId::background());
-    let t = ctx.input(|i| i.time) as f32;
-    super::aurora_bg::paint(&painter, p, rect, t, 1.0);
-    // slow animation: ~30 images/s are plenty
-    ctx.request_repaint_after(std::time::Duration::from_millis(33));
+    if let Some(texture) = lolas_background_texture(ctx) {
+        let size = texture.size();
+        let image_aspect = size[0] as f32 / (size[1] as f32).max(1.0);
+        let view_aspect = rect.width() / rect.height().max(1.0);
+        // Crop to fill rather than stretch when the window changes size.
+        let uv = if view_aspect > image_aspect {
+            let visible = image_aspect / view_aspect;
+            egui::Rect::from_min_max(
+                egui::pos2(0.0, (1.0 - visible) / 2.0),
+                egui::pos2(1.0, (1.0 + visible) / 2.0),
+            )
+        } else {
+            let visible = view_aspect / image_aspect;
+            egui::Rect::from_min_max(
+                egui::pos2((1.0 - visible) / 2.0, 0.0),
+                egui::pos2((1.0 + visible) / 2.0, 1.0),
+            )
+        };
+        painter.image(texture.id(), rect, uv, Color32::WHITE);
+        // Very light shading allows UI labels to remain legible while retaining gold.
+        painter.rect_filled(rect, 0.0, Color32::from_black_alpha(12));
+    } else {
+        let t = ctx.input(|i| i.time) as f32;
+        super::aurora_bg::paint(&painter, p, rect, t, 1.0);
+        ctx.request_repaint_after(std::time::Duration::from_millis(33));
+    }
 }
 
 fn img(ui: &egui::Ui, icons: &Icons, name: &str, rect: egui::Rect, tint: Color32) {
@@ -680,7 +721,6 @@ pub fn show(
     let card_w = 380.0f32.min(screen.width() - 32.0);
 
     // ---- brand + login card (center)
-    let mut login_card = egui::Rect::NOTHING;
     let area = egui::Id::unique("login_area");
     // In a low window (1280 × 720) the centred block would reach the line of
     // buttons along the bottom: the news, as tall as the card, then stood
@@ -715,11 +755,11 @@ pub fn show(
                     super::aurora_bg::radial_glow(&painter, r.center(), 150.0, p.violet, 0.42);
                 }
                 ui.add_space(2.0);
-                ui.label(RichText::new("Aurora Viewer").size(34.0).strong().color(p.ink));
+                ui.label(RichText::new("Lolas World Viewer").size(34.0).strong().color(p.ink));
                 ui.label(RichText::new(client_tagline()).size(13.0).color(p.violet_pale));
                 ui.add_space(18.0);
             });
-            login_card = card(ui, p, 24, true, |ui| {
+            card(ui, p, 24, true, |ui| {
                 ui.set_width(card_w - 48.0);
                 ui.spacing_mut().item_spacing.y = 6.0;
                 let enabled = !form.busy && !super::grids::is_open(&ctx);
@@ -962,12 +1002,8 @@ pub fn show(
             .rect;
         });
 
-    // ---- version + news (right)
-    if wide {
-        if chrome::sidebar(&ctx, p, icons, info, login_card, 330.0, lowest) {
-            action = LoginAction::CheckUpdates;
-        }
-    } else if info.can_check_updates {
+    // ---- Keep the hibiscus background visible instead of the news sidebar.
+    if !wide && info.can_check_updates {
         egui::Area::new(egui::Id::unique("login_check_updates"))
             // left of the accessibility button and the preferences cogwheel
             // of `chrome::footer`
